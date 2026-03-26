@@ -57,7 +57,66 @@ Slack thread:
 ${threadText}`;
 
   const res = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,
+    const express = require("express");
+const axios = require("axios");
+const crypto = require("crypto");
+
+const app = express();
+
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
+
+const {
+  SLACK_BOT_TOKEN,
+  SLACK_SIGNING_SECRET,
+  GEMINI_API_KEY,
+  YOUTRACK_URL,
+  YOUTRACK_TOKEN,
+  PORT = 3000,
+} = process.env;
+
+function verifySlack(req, res) {
+  const ts = req.headers["x-slack-request-timestamp"];
+  const sig = req.headers["x-slack-signature"];
+  if (!ts || !sig) { res.sendStatus(403); return false; }
+  const base = `v0:${ts}:${req.rawBody}`;
+  const expected = "v0=" + crypto.createHmac("sha256", SLACK_SIGNING_SECRET)
+    .update(base).digest("hex");
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+    res.sendStatus(403); return false;
+  }
+  return true;
+}
+
+async function fetchThread(channel, threadTs) {
+  const { data } = await axios.get(
+    "https://slack.com/api/conversations.replies",
+    {
+      params: { channel, ts: threadTs, limit: 200 },
+      headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
+    }
+  );
+  if (!data.ok) throw new Error(`Slack error: ${data.error}`);
+  return data.messages.map((m) => m.text).join("\n---\n");
+}
+
+async function generateBugReport(threadText) {
+  const prompt = `You are a bug report assistant. Given the following Slack thread, extract and generate a structured bug report.
+
+Return ONLY valid JSON with exactly these keys:
+- title: short, clear bug title (max 10 words, no punctuation at end)
+- summary: 1-2 sentence description of what went wrong
+- steps: numbered steps to reproduce (use \\n between steps)
+- expected: what should have happened
+- actual: what actually happened
+- customers: affected customer names or "Unknown" if not mentioned
+
+Slack thread:
+${threadText}`;
+
+  const res = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_API_KEY}`,
     {
       contents: [{ parts: [{ text: prompt }] }],
     },
