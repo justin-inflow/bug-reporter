@@ -64,7 +64,6 @@ ${threadText}`;
     `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json" },
     },
     { headers: { "Content-Type": "application/json" } }
   );
