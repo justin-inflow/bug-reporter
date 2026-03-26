@@ -12,7 +12,7 @@ app.use(express.json({
 const {
   SLACK_BOT_TOKEN,
   SLACK_SIGNING_SECRET,
-  ANTHROPIC_API_KEY,
+  GEMINI_API_KEY,
   YOUTRACK_URL,       // e.g. https://yourteam.youtrack.cloud
   YOUTRACK_TOKEN,
   PORT = 3000,
@@ -45,7 +45,7 @@ async function fetchThread(channel, threadTs) {
   return data.messages.map((m) => m.text).join("\n---\n");
 }
 
-// ─── Ask Claude to turn thread text into a structured bug report ─────────────
+// ─── Ask Gemini to turn thread text into a structured bug report ─────────────
 async function generateBugReport(threadText, threadUrl) {
   const prompt = `You are a bug report assistant. Given the following Slack thread, extract and generate a structured bug report.
 
@@ -61,22 +61,15 @@ Slack thread:
 ${threadText}`;
 
   const res = await axios.post(
-    "https://api.anthropic.com/v1/messages",
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }],
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: "application/json" },
     },
-    {
-      headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-    }
+    { headers: { "Content-Type": "application/json" } }
   );
 
-  const raw = res.data.content[0].text.replace(/```json|```/g, "").trim();
+  const raw = res.data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
   return JSON.parse(raw);
 }
 
