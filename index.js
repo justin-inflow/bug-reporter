@@ -4,7 +4,6 @@ const crypto = require("crypto");
 
 const app = express();
 
-// ─── Raw body needed for Slack signature verification ───────────────────────
 app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
@@ -13,12 +12,11 @@ const {
   SLACK_BOT_TOKEN,
   SLACK_SIGNING_SECRET,
   GEMINI_API_KEY,
-  YOUTRACK_URL,       // e.g. https://yourteam.youtrack.cloud
+  YOUTRACK_URL,
   YOUTRACK_TOKEN,
   PORT = 3000,
 } = process.env;
 
-// ─── Verify requests actually come from Slack ────────────────────────────────
 function verifySlack(req, res) {
   const ts = req.headers["x-slack-request-timestamp"];
   const sig = req.headers["x-slack-signature"];
@@ -32,7 +30,6 @@ function verifySlack(req, res) {
   return true;
 }
 
-// ─── Fetch all messages in a Slack thread ────────────────────────────────────
 async function fetchThread(channel, threadTs) {
   const { data } = await axios.get(
     "https://slack.com/api/conversations.replies",
@@ -45,8 +42,7 @@ async function fetchThread(channel, threadTs) {
   return data.messages.map((m) => m.text).join("\n---\n");
 }
 
-// ─── Ask Gemini to turn thread text into a structured bug report ─────────────
-async function generateBugReport(threadText, threadUrl) {
+async function generateBugReport(threadText) {
   const prompt = `You are a bug report assistant. Given the following Slack thread, extract and generate a structured bug report.
 
 Return ONLY valid JSON with exactly these keys:
@@ -61,10 +57,9 @@ Slack thread:
 ${threadText}`;
 
   const res = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,
     {
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json" },
     },
     { headers: { "Content-Type": "application/json" } }
   );
@@ -73,7 +68,6 @@ ${threadText}`;
   return JSON.parse(raw);
 }
 
-// ─── Create a bug issue in YouTrack ─────────────────────────────────────────
 async function createYouTrackIssue(report, threadUrl) {
   const description = `## Summary
 ${report.summary}
@@ -115,7 +109,6 @@ ${report.customers}`;
   return data;
 }
 
-// ─── Post a reply back into the Slack thread ─────────────────────────────────
 async function postSlackReply(channel, threadTs, text) {
   await axios.post(
     "https://slack.com/api/chat.postMessage",
@@ -124,32 +117,27 @@ async function postSlackReply(channel, threadTs, text) {
   );
 }
 
-// ─── Core handler — shared by emoji and slash command ────────────────────────
 async function handleBugReport({ channel, threadTs, threadUrl, responseUrl }) {
   const threadText = await fetchThread(channel, threadTs);
-  const report     = await generateBugReport(threadText, threadUrl);
+  const report     = await generateBugReport(threadText);
   const issue      = await createYouTrackIssue(report, threadUrl);
   const issueUrl   = `${YOUTRACK_URL}/issue/${issue.idReadable}`;
   const msg        = `✅ Bug ticket created: *<${issueUrl}|${issue.idReadable}>* — ${report.title}`;
 
   if (responseUrl) {
-    // Slash command — respond ephemerally so only the caller sees it
     await axios.post(responseUrl, { response_type: "ephemeral", text: msg });
   }
-  // Always reply in the thread so the whole team can see it
   await postSlackReply(channel, threadTs, msg);
 }
 
-// ─── ROUTE: Emoji reaction ───────────────────────────────────────────────────
 app.post("/slack/events", async (req, res) => {
   if (!verifySlack(req, res)) return;
 
   const { type, event, challenge } = req.body;
 
-  // Slack sends this once when you first set the URL — just reply with the challenge
   if (type === "url_verification") return res.json({ challenge });
 
-  res.sendStatus(200); // Acknowledge immediately (Slack requires < 3s)
+  res.sendStatus(200);
 
   if (
     type === "event_callback" &&
@@ -157,8 +145,8 @@ app.post("/slack/events", async (req, res) => {
     event.reaction === "reportinprogress"
   ) {
     try {
-      const channel  = event.item.channel;
-      const threadTs = event.item.ts;
+      const channel   = event.item.channel;
+      const threadTs  = event.item.ts;
       const threadUrl = `https://slack.com/archives/${channel}/p${threadTs.replace(".", "")}`;
       console.log("Emoji trigger fired:", { channel, threadTs, reaction: event.reaction });
       await handleBugReport({ channel, threadTs, threadUrl });
@@ -172,26 +160,22 @@ app.post("/slack/events", async (req, res) => {
   }
 });
 
-// ─── ROUTE: Slash command (/bugreport) ───────────────────────────────────────
 app.post("/slack/command", async (req, res) => {
   if (!verifySlack(req, res)) return;
 
-  // Acknowledge immediately with a temporary message
   res.json({ response_type: "ephemeral", text: "⏳ Creating bug ticket…" });
 
   try {
     const { channel_id, text, thread_ts, response_url } = req.body;
 
     let channel  = channel_id;
-    let threadTs = thread_ts; // works when run inside a thread
+    let threadTs = thread_ts;
 
-    // If a thread URL was pasted, parse channel + ts from it
-    // e.g. https://yourworkspace.slack.com/archives/C12345/p1234567890123456
     const urlMatch = text?.match(/archives\/([A-Z0-9]+)\/p(\d+)/);
     if (urlMatch) {
       channel  = urlMatch[1];
-      const raw = urlMatch[2];           // 16-digit string
-      threadTs = raw.slice(0, 10) + "." + raw.slice(10); // → unix.microseconds
+      const raw = urlMatch[2];
+      threadTs = raw.slice(0, 10) + "." + raw.slice(10);
     }
 
     if (!threadTs) {
@@ -206,11 +190,13 @@ app.post("/slack/command", async (req, res) => {
     await handleBugReport({ channel, threadTs, threadUrl, responseUrl: response_url });
   } catch (err) {
     console.error("Slash command error:", err.message);
+    if (err.response) {
+      console.error("Response status:", err.response.status);
+      console.error("Response data:", JSON.stringify(err.response.data));
+    }
   }
 });
 
-// ─── ROUTE: Interactivity placeholder (required by manifest) ─────────────────
 app.post("/slack/interactive", (req, res) => res.sendStatus(200));
 
-// ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`BugReporter listening on port ${PORT}`));
