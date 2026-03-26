@@ -167,9 +167,14 @@ app.post("/slack/events", async (req, res) => {
       const channel  = event.item.channel;
       const threadTs = event.item.ts;
       const threadUrl = `https://slack.com/archives/${channel}/p${threadTs.replace(".", "")}`;
+      console.log("Emoji trigger fired:", { channel, threadTs, reaction: event.reaction });
       await handleBugReport({ channel, threadTs, threadUrl });
     } catch (err) {
       console.error("Emoji trigger error:", err.message);
+      if (err.response) {
+        console.error("Response status:", err.response.status);
+        console.error("Response data:", JSON.stringify(err.response.data));
+      }
     }
   }
 });
